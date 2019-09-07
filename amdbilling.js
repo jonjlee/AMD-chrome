@@ -11,7 +11,7 @@ jq(function() {
       <span class="headerbar">Billing Sets</span>
       <div id="apptptname" style="left:5px; top:30px; right: 5px">No appointment selected.</div>
       <div id="apptcomments" style="left:5px; top:45px; right: 5px">Enter age for checkups or L1-L5 for sick.</div>
-      <input type="text" id="chargedesc" style="left:5px; top:60px; right:5px"></input>
+      <input type="text" id="chargedesc" style="left:5px; top:60px; right:5px" autocomplete="off"></input>
       <button id="applycharge" class="webbutton" style="right:5px; top:60px; width:55px; height:19px;">Apply</button>
       <div style="left:5px; top:75px; right: 5px; bottom:5px">
         <ul id="chargedetails" style="padding-inline-start:15px"></ul>
@@ -59,6 +59,12 @@ function bindButtons() {
     // Defer processing until all other click handlers are complete
     setTimeout(handleSelectAppt, 1);
   });
+  // 'Process Charge Slip' clicks. We have to proxy the underlying click handler because
+  // the mock library calls the jQ click handler directly, rather than trigger a click event
+  // when the shortcut key is used. handleProcessSlip() is called by handleMessage() once
+  // we receive the appropriate message.
+  inject('onlineChargeSlips.origProcessChargeSlips=onlineChargeSlips.processChargeSlips; onlineChargeSlips.processChargeSlips=function(){onlineChargeSlips.origProcessChargeSlips.apply(this,arguments); window.postMessage({type:"event",val:"processChargeSlips"},"*");}');
+  // Handle our 'Apply' button
   jq('#applycharge').click(processCharge);
 }
 // Bind all event handlers
@@ -111,6 +117,7 @@ function toggleAllCodes() {
 }
 
 // Handle when user selects a new appointment from the list
+let lastSelectedRowIdx = -1;
 function handleSelectAppt() {
   const $selectedRow = jq('#appointmentsTable tr.selectedrow');
   if ($selectedRow.length) {
@@ -149,6 +156,20 @@ function handleSelectAppt() {
         }
       });
   }
+  lastSelectedRowIdx = $selectedRow.index();
+}
+
+function handleProcessSlip() {
+  // Select appointment at same index as most recently selected one
+  if (lastSelectedRowIdx >= 0) {
+    const $rows = jq('#appointmentsTable tr');
+    const rowIdx = Math.min(lastSelectedRowIdx, $rows.length-1);
+    const $row = $rows.eq(rowIdx);
+    $row.find('td:first').click();
+  } else {
+    // We don't know the index of the originally selected appt; just click the first
+    jq('#appointmentsTable tr:first td:first').click();
+  }
 }
 
 // Convert age in years and months to the nearest well child check age
@@ -185,10 +206,10 @@ function commentToChargeDesc(curDesc, comments) {
   const head = comments.split(/[\/;]/, 1)[0];
 
   // Try our best to guess a known diagnoses from the appt comments
-  const knownDx = ['asthma', 'bee', 'bili', 'cough', 'constip', 'fever', 'rash', 'vomiting', 'uti']
+  const knownDx = ['aom', 'asthma', 'bee', 'bili', 'cough', 'concussion', 'constip', 'fever', 'headache', 'rash', 'vomiting', 'uti']
   if (comments.match(/^cir/i)) {
     return 'circ';
-  } else if (head.match(/nb/i)) {
+  } else if (head.match(/nb|1 week/i)) {
     return 'nb';
   } else {
     // test for dxs that are word for word equivalent to our keywords, e.g. cough and fever
@@ -216,7 +237,7 @@ function getCharges(chargeStr) {
     // specific imms                     
     'dtap', 'dtap/ipv', 'dtap/ipv/hepb', 'flu', 'gardasil', 'hepa', 'hepb', 'hib', 'hpv', 'kinrix', 'mcv', 'menactra', 'menacwy', 'mmr', 'mmrv', 'pcv', 'pediarix', 'proquad', 'rota', 'tdap', 'varicella', 'vzv',
     // procedures
-    'circ', 'cerumen', 'dental', 'denver', 'mchat', 'audio', 'hearing', 'vision', 'wax',
+    'circ', 'cerumen', 'ctx', 'dental', 'denver', 'dex', 'mchat', 'neb', 'audio', 'hearing', 'preg', 'rss', 'strep', 'vision', 'wax',
   ]);
 
 
@@ -311,19 +332,23 @@ function getCharges(chargeStr) {
     } else if (keyword.match(/12y/)) {
       icds.unshift(isNew ? '99384' : '99394', 'Z00.129');
       icds.push('90651');
+      icds.push('96127');
       icds.push('99173');
       recall = { type: 'ap_type71', n: 12, unit: 'MONTHS' };
     } else if (keyword.match(/(13|14|15|17)y/)) {
       icds.unshift(isNew ? '99384' : '99394', 'Z00.129');
+      icds.push('96127');
       icds.push('99173');
       recall = { type: 'ap_type71', n: 12, unit: 'MONTHS' };
     } else if (keyword.match(/16y/)) {
       icds.unshift(isNew ? '99384' : '99394', 'Z00.129');
       icds.push('90734');
+      icds.push('96127');
       icds.push('99173');
       recall = { type: 'ap_type71', n: 12, unit: 'MONTHS' };
     } else if (keyword.match(/(18|19|[2-3][0-9])y/)) {
       icds.unshift(isNew ? '99385' : '99395', 'Z00.129');
+      icds.push('96127');
       icds.push('99173');
       recall = { type: 'ap_type71', n: 12, unit: 'MONTHS' };
     }
@@ -359,9 +384,14 @@ function getCharges(chargeStr) {
     if (keyword == 'hepb') { icds.push('90744') }
 
     // Handle procedures
-    if (keyword == 'circ') { icds.unshift('54160', 'Z41.2') }
+    if (keyword == 'circ') { icds.unshift('54160', 'N47.1') }
+    if (keyword == 'ctx') { icds.push('J0696') }
     if (keyword == 'denver' || keyword == 'mchat') { icds.push('96110') }
+    if (keyword == 'dex') { icds.push('J1100') }
     if (keyword == 'hearing' || keyword == 'audio') { icds.push('92552') }
+    if (keyword == 'preg') { icds.push('81025') }
+    if (keyword == 'neb') { icds.push('94640', 'J7613.63', 'A7016') }
+    if (keyword == 'rss' || keyword == 'strep') { icds.push('87880') }
     if (keyword == 'vision') { icds.push('99173') }
     if (keyword == 'wax' || keyword == 'cerumen') { icds.push('69210', 'H61.20') }
   });
@@ -375,37 +405,36 @@ function getCharges(chargeStr) {
   }
 
   // default to level 3 visit if not wcc and visit level not specified
-  if (!isWcc && (icds.length == 0 || !icds.some(c => c.match(/992[0-1][1-5]|Z41.2/)))) {
+  if (!isWcc && (icds.length == 0 || !icds.some(c => c.match(/992[0-1][1-5]|N47.1/)))) {
     icds.unshift(isNew ? '99203' : '99213');
   }
   
   // Handle specific diagnoses based on the non-keyword portion of entered text
   let dxtext = '';
-  if (rest.match(/^constip/)) {
-    icds.push('K59.00');
-  } else if (rest == 'asthma') {
-    icds.push('J45.901');
-  } else if (rest == 'bee') {
-    icds.push('T63.441A');
-  } else if (rest == 'bili') {
-    icds.push('P59.9');
-  } else if (rest == 'cough') {
-    icds.push('R05');
-  } else if (rest == 'fever') {
-    icds.push('R50.9') ;
-  } else if (rest == 'rash') { 
-    icds.push('R21');
-  } else if (rest == 'vomiting') { 
-    icds.push('R11.10');
-  } else if (rest == 'uti') { 
-    icds.push('N39.0');
-  } else if (rest == 'wart') {
-    icds.push('17110', 'B07.9'); 
+  dxToIcd = {
+    'constip': 'K59.00',
+    'constipation': 'K59.00',
+    'concussion': ['S06.0X0A', '94760', '99173'],
+    'aom': 'H66.90',
+    'asthma': ['J45.901', '94760'],
+    'bee': 'T63.441A',
+    'bili': 'P59.9',
+    'cough': ['R05', '94760'],
+    'fever': 'R50.9',
+    'headache': 'R51',
+    'rash': 'R21',
+    'vomiting': 'R11.10', 
+    'uti': 'N39.0', 
+    'wart': ['17110', 'B07.9'], 
+  };
+  
+  if (dxToIcd[rest]) {
+    icds.push(dxToIcd[rest]);
   } else {
     dxtext = rest;
   }
 
-  return { icds, dxtext, recall };
+  return { icds: icds.flat(), dxtext, recall };
 }
 
 // Separate known keywords in a dictionary from the rest of the text in a string
@@ -448,7 +477,7 @@ function handleChargeInput() {
   // Convert ICD codes to human readable <ul> and display
   const items = charges.icds.length ? 
     charges.icds.map(icd => 
-      '<li>' + (ICDToText[icd] || 'Unknown ICD Code') + '<span style="color:#aaaaaa">&nbsp;(' + icd + ')</span></li>'
+      '<li>' + (ICDToText[icd] || 'ICD Code') + '<span style="color:#aaaaaa">&nbsp;(' + icd + ')</span></li>'
     ) : '';
   if (charges.recall) {
     items.push('<li>Recall in ' + charges.recall.n + ' ' + charges.recall.unit.toLowerCase() + '</li>');
@@ -483,24 +512,39 @@ function processCharge() {
 
   // Set recall
   if (recall && recall.n) {
-    // TODO: Add a new recall if the requested recall type doesn't already exists
-    //  // Get visitid of selected appointment
-    //  const $selectedRow = jq('#appointmentsTable tr.selectedrow');
-    //  if ($selectedRow.length) {
-    //    const visitId = $selectedRow.attr('data-visitid');
-    //    // Get recall type (eg. ap_type71 is annual checkup) of first existing recall
-    //    getXml('onlineChargeSlips.screenXml.selectNodes("//patientlist/patient[*/visit[@id=\'' + visitId + '\']]/recalllist/recall/@profile")[0]')
-    //      .then(xml => {
-    //        // add new recall if this type doesn't exist yet
-    //        if (!xml || xml.value != recall.type) {
-    //
-    jq('#ellPatientRecallProvider input').val('LEE, JONATHAN').change()[0].dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, cancelable: true, keyCode: 13}))
-    jq('#patientRecallTypeSelect').val(recall.type);
-    jq('#patientRecallDueAmountSelect').val(recall.n);
-    jq('#patientRecallDueTypeSelect').val(recall.unit);
+    // Get visitid of selected appointment
+    const $selectedRow = jq('#appointmentsTable tr.selectedrow');
+    if ($selectedRow.length) {
+      const visitId = $selectedRow.attr('data-visitid');
+
+      // Check for existing appointments using call to AMD builtin onlineChargeSlips.checkFutureAppts(apptType, patientID)
+      const ptNodeSelector = '"//patientlist/patient[*/visit[@id=\'' + visitId + '\']]"';
+      getXml(
+        'onlineChargeSlips.screenXml.selectNodes(' + ptNodeSelector + ').item(0) && ' +
+        'onlineChargeSlips.checkFutureAppts("' + recall.type + '", ' + 
+          'onlineChargeSlips.screenXml.selectNodes(' + ptNodeSelector + ').item(0).getAttribute("id"))'
+      ).then(xml => {
+        if (!xml) {
+          // No appointment exists. Next, check for existing recall.
+          getXml('onlineChargeSlips.screenXml.selectNodes("//patientlist/patient[*/visit[@id=\'' + visitId + '\']]/recalllist/recall")[0]')
+          .then(recallXml => {
+            // Finally, add new recall if this type doesn't exist yet
+            if (!recallXml || recallXml.children[0].getAttribute("appttype") != recall.type) {
+              jq('#ellPatientRecallProvider input').val('LEE, JONATHAN').change()[0].dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, cancelable: true, keyCode: 13}))
+              jq('#patientRecallTypeSelect').val(recall.type);
+              jq('#patientRecallDueAmountSelect').val(recall.n);
+              jq('#patientRecallDueTypeSelect').val(recall.unit);
+            } else {
+              console.log('Found existing recall', recallXml);
+            }
+          });
+        } else {
+          console.log('Found existing appointment', xml);
+        }
+      });
+    }
   }
 }
-
 
 // ------------------------------------------------------------------
 // Utility functions and look up tables
@@ -522,7 +566,7 @@ async function getXml(expr) {
   if (resolveGetXml) {
     return;
   }
-  inject('window.postMessage({type:"XML",val:new XMLSerializer().serializeToString(' + expr + ')}, "*");');
+  inject('window.postMessage({type:"XML",val:(' + expr + ') && new XMLSerializer().serializeToString(' + expr + ')}, "*");');
   return new Promise(r =>{resolveGetXml = r});
 }
 function handleMessage(event) {
@@ -530,12 +574,17 @@ if (event.source != window) {
     return;
   }
   // Handle messsages passed from webpage via window.postMessage() (i.e. used by getXml())
-  if (event.data.type && (event.data.type == 'XML')) {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(event.data.val, 'text/xml');
-    resolveGetXml(doc);
-    resolveGetXml = null;
+  if (event && event.data && event.data.type) {
+    if (event.data.type == 'XML') {
+      const parser = new DOMParser();
+      const doc = event.data.val && parser.parseFromString(event.data.val, 'text/xml');
+      resolveGetXml(doc);
+      resolveGetXml = null;
+    } else if (event.data.type == 'event' && event.data.val == 'processChargeSlips') {
+      handleProcessSlip();
+    }
   }
+
 }
 
 // Descriptions for ICD codes
@@ -559,7 +608,9 @@ const ICDToText = {
   '90734': 'MCV',
   '90744': 'HepB',
   '92552': 'Hearing Screen',
+  '94760': 'Pulse Ox (single)',
   '96110': 'Devel Screen (Denver/MCHAT)',
+  '96127': 'ADHD / Depression Testing',
   '99173': 'Vision Screen',
   '99203': 'Level 3 New Patient',
   '99204': 'Level 4 New Patient',
@@ -576,17 +627,23 @@ const ICDToText = {
   '99393': '5-11YR Est Preventative',
   '99394': '12-17YR Est Preventative',
   '99395': '18-39YR Est Preventative',
+  '97460': 'Pulse Ox; Single',
   'D0120': 'Periodic Oral Eval',
-  'D9999': 'Oral Health Education',
+  'D9999': 'Oral Health Education', 
   'H61.20': 'Impacted Cerumen',
+  'H66.90': 'Acute otitis media, unspecified ear',
   'J45.901': 'Asthma',
   'K59.00': 'Constipation',
   'N39.0': 'UTI',
+  'N47.1': 'Phimosis',
+  'N47.8': 'Other disorders of prepuce',
   'P59.9': 'Neonatal jaundice',
   'R05': 'Cough',
   'R11.10': 'Vomiting',
   'R21': 'Rash and other nonspecific skin',
   'R50.9': 'Fever, unspecified',
+  'R51': 'Headache',
+  'S06.0X0A': 'Concussion (initial)',
   'T63.441A': 'Bee sting (initial)',
   'Z00.110': 'Newborn <8 days',
   'Z00.111': 'Newborn 8-28 days old',
